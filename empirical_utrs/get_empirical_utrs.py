@@ -61,7 +61,7 @@ def _get_tss_scan_bounds(gene, logger):
                    start=gene_start, end=gene_end,
                    strand=gene.strand))
 
-    # THIS IS WRONG
+    # TODO: fix this to account for genes on different strands
     return(gene_start - 1000, gene_end)
 
 
@@ -96,6 +96,7 @@ def _get_shortest_utr(gene, pileup_location, logger):
         logger.debug("Transcript {transcript}, coding start {start}".format(
             transcript=transcript.name, start=transcript.coding_start))
 
+        # TODO: if no coding start, take first base of first exon as coding start
         if transcript.coding_start is None:
             logger.debug("...no coding start")
             continue
