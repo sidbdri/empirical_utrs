@@ -15,6 +15,8 @@ class GtfRow(object):
     ATTRIBUTES_COL = 8
 
     EXON_FEATURE = "exon"
+    START_CODON_FEATURE = "start_codon"
+    STOP_CODON_FEATURE = "stop_codon"
 
     GENE_ID_ATTRIBUTE = "gene_id"
     TRANSCRIPT_ID_ATTRIBUTE = "transcript_id"
@@ -67,6 +69,12 @@ class GtfRow(object):
     def is_exon(self):
         return self.get_feature() == GtfRow.EXON_FEATURE
 
+    def is_start_codon(self):
+        return self.get_feature() == GtfRow.START_CODON_FEATURE
+
+    def is_stop_codon(self):
+        return self.get_feature() == GtfRow.STOP_CODON_FEATURE
+
     def __str__(self):
         fields = list(self.row_data)
 
@@ -99,7 +107,7 @@ class GtfInfo(object):
             if lines_processed % 10000 == 0:
                 self.logger.debug("Processed {l} GTF lines.".format(l=lines_processed))
 
-            if not row.is_exon():
+            if not (row.is_exon() or row.is_start_codon()):
                 continue
 
             gene_name = row.get_gene()
@@ -112,7 +120,14 @@ class GtfInfo(object):
                 transcript_info[gene_name] = gene
 
             transcript = gene.add_transcript(row)
-            transcript.add_exon(row)
+
+            if row.is_exon():
+                transcript.add_exon(row)
+            elif row.is_start_codon():
+                if row.get_strand() == "+":
+                    transcript.coding_start = row.get_start()
+                else:
+                    transcript.coding_start = row.get_end()
 
         self.logger.info("...read transcript information for {g} genes".format(
             g=len(transcript_info)))

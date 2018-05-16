@@ -2,6 +2,7 @@ class Gene(object):
     def __init__(self, gtf_row):
         self.name = gtf_row.get_gene()
         self.seqname = gtf_row.get_seqname()
+        self.strand = gtf_row.get_strand()
         self.transcripts = {}
 
     def add_transcript(self, gtf_row):
@@ -22,6 +23,8 @@ class Transcript(object):
         self.name = gtf_row.get_transcript()
         self.strand = gtf_row.get_strand()
         self.exons = []
+        self.coding_start = None
+        self.coding_end = None
 
     def add_exon(self, gtf_row):
         self.exons.append(Exon(gtf_row))

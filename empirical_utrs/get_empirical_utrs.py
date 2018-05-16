@@ -15,6 +15,7 @@ TODO: Calculate empirical UTRs.
 """
 
 import docopt
+import pysam
 import schema
 import sys
 
@@ -43,34 +44,139 @@ def validate_command_line_options(options):
         exit(exc.code)
 
 
+def _get_tss_scan_bounds(gene, logger):
+    gene_start = sys.maxint
+    gene_end = -sys.maxint - 1
+
+    for transcript in gene.transcripts.values():
+        for exon in transcript.exons:
+            if exon.start < gene_start:
+                gene_start = exon.start
+            if exon.end > gene_end:
+                gene_end = exon.end
+
+    logger.debug(("Gene {gene}, chromosome {chr}, start {start}, " +
+                  "end {end}, strand {strand}").
+            format(gene=gene.name, chr=gene.seqname,
+                   start=gene_start, end=gene_end,
+                   strand=gene.strand))
+
+    # THIS IS WRONG
+    return(gene_start - 1000, gene_end)
+
+
+def _get_maximum_pileup_location(samfile, gene, scan_start, scan_end, logger):
+    gene_is_reverse = gene.strand == "-"
+    max_pileup = 0
+    pileup_location = None
+
+    for pileupcolumn in samfile.pileup(
+            "chr" + str(gene.seqname), scan_start, scan_end, truncate=True):
+
+        pileup_count = 0
+        for pileupread in pileupcolumn.pileups:
+            if pileupread.alignment.is_reverse == gene_is_reverse:
+                pileup_count = pileup_count + 1
+
+        if pileup_count > max_pileup or \
+            (pileup_count == max_pileup and not gene_is_reverse):
+            pileup_location = pileupcolumn.pos
+            max_pileup = pileup_count
+
+    return (max_pileup, pileup_location)
+
+
+def _get_shortest_utr(gene, pileup_location, logger):
+    logger.debug("Getting shortest UTR for {gene}".format(gene=gene.name))
+
+    shortest_utr = sys.maxint
+    shortest_utr_transcript = None
+
+    for transcript in gene.transcripts.values():
+        logger.debug("Transcript {transcript}, coding start {start}".format(
+            transcript=transcript.name, start=transcript.coding_start))
+
+        if transcript.coding_start is None:
+            logger.debug("...no coding start")
+            continue
+
+        utr = pileup_location - transcript.coding_start
+        logger.debug("Transcript {transcript}, coding start {start}, UTR {utr}, strand {strand}".format(
+            transcript=transcript.name, start=transcript.coding_start,
+            utr=utr, strand=gene.strand))
+
+        if (gene.strand == "+" and utr > 0) or (gene.strand == "-" and utr < 0):
+            logger.debug("...pileup location inconsistent with coding start")
+            continue
+
+        if utr < 0:
+            utr = -utr
+
+        if utr < shortest_utr:
+            logger.debug("...new shortest UTR {utr}".format(utr=utr))
+            shortest_utr = utr
+            shortest_utr_transcript = transcript
+
+    if shortest_utr_transcript is None or shortest_utr > 500:
+        logger.debug("No shortest UTR found.")
+        return (None, None)
+
+    logger.debug("Found shortest UTR {utr} for {transcript}".
+                format(utr=shortest_utr, transcript=shortest_utr_transcript.name))
+    return (shortest_utr, shortest_utr_transcript)
+
+
 def _calculate_empirical_utrs(transcript_info, cage_bam, logger):
     logger.info("Calculating empirical UTRs...")
     empirical_utrs = {}
+    count = 0
+    no_alignment_data = 0
+    no_pileup_location = 0
+    no_shortest_utr = 0
+
+    samfile = pysam.AlignmentFile(cage_bam)
 
     for gene_name, gene in transcript_info.iteritems():
-        gene_start = sys.maxint
-        gene_end = -sys.maxint - 1
-        exon_starts = defaultdict(list)
-        exon_ends = defaultdict(list)
+        count = count + 1
+        if count % 1000 == 0:
+            logger.info("...processed {g} genes.".format(g=len(empirical_utrs)))
 
-        for transcript in gene.transcripts.values():
-            for exon in transcript.exons:
-                if exon.start < gene_start:
-                    gene_start = exon.start
-                if exon.end > gene_end:
-                    gene_end = exon.end
+        chr_seqname = 'chr' + str(gene.seqname)
+        if chr_seqname not in samfile.references:
+            no_alignment_data += 1
+            logger.debug("Found no alignment data for {gene}".
+                        format(gene=gene_name))
+            continue
 
-                exon_starts[exon.start].append(exon)
-                exon_ends[exon.end].append(exon)
+        scan_start, scan_end = _get_tss_scan_bounds(gene, logger)
 
-        logger.info("Gene {gene}, chromosome {chr}, start {start}, end {end}".
-                format(gene=gene, chr=gene.seqname,
-                       start=gene_start, end=gene_end))
+        max_pileup, pileup_location = _get_maximum_pileup_location(
+                samfile, gene, scan_start, scan_end, logger)
 
-        empirical_utrs[gene_name] = 0
+        if pileup_location is None:
+            no_pileup_location += 1
+            logger.debug("Found no pileup location for {gene}".
+                        format(gene=gene_name))
+            continue
 
-        if len(empirical_utrs) % 1000 == 0:
-            logger.info("...processed {g} genes.".format(g=len(gene_lengths)))
+        shortest_utr, shortest_utr_transcript = _get_shortest_utr(
+                gene, pileup_location, logger)
+
+        if shortest_utr_transcript is None:
+            no_shortest_utr += 1
+            logger.debug("Found no shortest UTR for {gene}".
+                        format(gene=gene_name))
+            continue
+
+        empirical_utrs[gene_name] = (pileup_location, max_pileup,
+                                     shortest_utr, shortest_utr_transcript.name)
+
+
+    logger.info("Found empirical UTRs for {num_genes} genes; no alignment data {no_align}, no pileup location {no_pileup}, no shortest UTR {no_utr}.".
+                format(num_genes=len(empirical_utrs),
+                       no_align=no_alignment_data,
+                       no_pileup=no_pileup_location,
+                       no_utr=no_shortest_utr))
 
     return empirical_utrs
 
@@ -78,13 +184,15 @@ def _calculate_empirical_utrs(transcript_info, cage_bam, logger):
 def _print_empirical_utrs(empirical_utrs, logger):
     logger.info("Printing empirical UTRs...")
 
-    print("gene,...")
+    print("gene,tss,pileup,utr,transcript")
 
     for gene in sorted(empirical_utrs.keys()):
         empirical_utr = empirical_utrs[gene]
 
-        print("{g},{eu}".format(
-            g=gene, eu=empirical_utr))
+        print("{g},{tss},{pileup},{utr},{transcript}".format(
+            g=gene,
+            tss=empirical_utr[0], pileup=empirical_utr[1],
+            utr=empirical_utr[2], transcript=empirical_utr[3]))
 
 
 def get_empirical_utrs(args):
