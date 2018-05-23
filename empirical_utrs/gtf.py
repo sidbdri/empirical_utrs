@@ -21,6 +21,8 @@ class GtfRow(object):
     GENE_ID_ATTRIBUTE = "gene_id"
     TRANSCRIPT_ID_ATTRIBUTE = "transcript_id"
 
+    GENE_BIOTYPE_ATTRIBUTE="gene_biotype"
+
     @classmethod
     def from_file(cls, row_data):
         strip_quotes = lambda x: x.replace('"', '')
@@ -63,6 +65,9 @@ class GtfRow(object):
     def get_gene(self):
         return self.attr_dict[GtfRow.GENE_ID_ATTRIBUTE]
 
+    def get_gene_biotype(self):
+        return self.attr_dict[GtfRow.GENE_BIOTYPE_ATTRIBUTE]
+
     def get_transcript(self):
         return self.attr_dict[GtfRow.TRANSCRIPT_ID_ATTRIBUTE]
 
@@ -74,6 +79,9 @@ class GtfRow(object):
 
     def is_stop_codon(self):
         return self.get_feature() == GtfRow.STOP_CODON_FEATURE
+
+    def is_protein_codeing_gene(self):
+        return self.attr_dict[GtfRow.GENE_BIOTYPE_ATTRIBUTE] == "protein_coding"
 
     def __str__(self):
         fields = list(self.row_data)
@@ -107,7 +115,7 @@ class GtfInfo(object):
             if lines_processed % 10000 == 0:
                 self.logger.debug("Processed {l} GTF lines.".format(l=lines_processed))
 
-            if not (row.is_exon() or row.is_start_codon()):
+            if not (row.is_exon() or row.is_start_codon() or row.is_protein_codeing_gene()):
                 continue
 
             gene_name = row.get_gene()
