@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 """Usage:
-    get_empirical_utrs [--log-level=<log-level>] <transcript-gtf-file> <cage-bam-file>
+    get_empirical_utrs [--log-level=<log-level>] <transcript-gtf-file> <cage-bam-file> <output-file>
 
 -h --help                    Show this message.
 -v --version                 Show version.
@@ -10,6 +10,7 @@
 <transcript-gtf-file>        File containing transcript definitions in GTF
                              format.
 <cage-bam-file>              BAM file containing CAGE data.
+<output-file>                Output file container gene results
 
 TODO: Calculate empirical UTRs.
 """
@@ -31,6 +32,7 @@ LOG_LEVEL_VALS = str(log.LOG_LEVELS.keys())
 
 TRANSCRIPT_GTF_FILE = "<transcript-gtf-file>"
 CAGE_BAM_FILE = "<cage-bam-file>"
+OUTPUT_FILE = "<output-file>"
 
 def validate_command_line_options(options):
     try:
@@ -40,6 +42,8 @@ def validate_command_line_options(options):
             options[TRANSCRIPT_GTF_FILE], "Transcript GTF file must exist")
         opt.validate_file_option(
             options[CAGE_BAM_FILE], "CAGE BAM file must exist")
+        opt.validate_file_already_exist_option(
+            options[OUTPUT_FILE], "Output file must not exist")
     except schema.SchemaError as exc:
         exit(exc.code)
 
@@ -62,6 +66,8 @@ def _get_tss_scan_bounds(gene, logger):
                    strand=gene.strand))
 
     # TODO: fix this to account for genes on different strands
+    if gene.strand == "-":
+        return (gene_start, gene_end + 1000)
     return(gene_start - 1000, gene_end)
 
 
@@ -98,8 +104,24 @@ def _get_shortest_utr(gene, pileup_location, logger):
 
         # TODO: if no coding start, take first base of first exon as coding start
         if transcript.coding_start is None:
-            logger.debug("...no coding start")
-            continue
+            transcript_left_most=sys.maxint
+            transcript_right_most=-sys.maxint-1
+            for exon in transcript.exons:
+                if exon.start < transcript_left_most:
+                    transcript_left_most = exon.start
+                if exon.end > transcript_right_most:
+                    transcript_right_most = exon.end
+
+
+            if gene.strand == "-":
+                transcript.coding_start = transcript_right_most
+            else:
+                transcript.coding_start = transcript_left_most
+
+
+            logger.debug("...no coding start, use the start position of the first exon {start} "
+                         "as coding start".format(start=transcript.coding_start))
+
 
         utr = pileup_location - transcript.coding_start
         logger.debug("Transcript {transcript}, coding start {start}, UTR {utr}, strand {strand}".format(
@@ -112,6 +134,10 @@ def _get_shortest_utr(gene, pileup_location, logger):
 
         if utr < 0:
             utr = -utr
+
+        if utr == 0:
+            logger.debug("...pileup location overlap with coding start. Skip this transscript.")
+            continue
 
         if utr < shortest_utr:
             logger.debug("...new shortest UTR {utr}".format(utr=utr))
@@ -170,7 +196,7 @@ def _calculate_empirical_utrs(transcript_info, cage_bam, logger):
             continue
 
         empirical_utrs[gene_name] = (pileup_location, max_pileup,
-                                     shortest_utr, shortest_utr_transcript.name)
+                                     shortest_utr, shortest_utr_transcript.name,gene.strand,gene.seqname)
 
 
     logger.info("Found empirical UTRs for {num_genes} genes; no alignment data {no_align}, no pileup location {no_pileup}, no shortest UTR {no_utr}.".
@@ -182,19 +208,33 @@ def _calculate_empirical_utrs(transcript_info, cage_bam, logger):
     return empirical_utrs
 
 
-def _print_empirical_utrs(empirical_utrs, logger):
+def _print_empirical_utrs(empirical_utrs, logger, output_file):
     logger.info("Printing empirical UTRs...")
 
-    print("gene,tss,pileup,utr,transcript")
+    f= open(output_file,"w+")
+    f.write("gene,chr,strand,tss,pileup,utr,transcript\n")
+
 
     for gene in sorted(empirical_utrs.keys()):
         empirical_utr = empirical_utrs[gene]
 
-        print("{g},{tss},{pileup},{utr},{transcript}".format(
+        f.write("{g},{chr},{strand},{tss},{pileup},{utr},{transcript}\n".format(
             g=gene,
             tss=empirical_utr[0], pileup=empirical_utr[1],
-            utr=empirical_utr[2], transcript=empirical_utr[3]))
+            utr=empirical_utr[2], transcript=empirical_utr[3],
+            strand=empirical_utr[4],chr=empirical_utr[5]))
 
+
+    print("gene,chr,strand,tss,pileup,utr,transcript")
+
+    for gene in sorted(empirical_utrs.keys()):
+        empirical_utr = empirical_utrs[gene]
+
+        print("{g},{chr},{strand},{tss},{pileup},{utr},{transcript}".format(
+            g=gene,
+            tss=empirical_utr[0], pileup=empirical_utr[1],
+            utr=empirical_utr[2], transcript=empirical_utr[3],
+            strand=empirical_utr[4],chr=empirical_utr[5]))
 
 def get_empirical_utrs(args):
     docstring = __doc__.format(log_level_vals=LOG_LEVEL_VALS)
@@ -210,4 +250,4 @@ def get_empirical_utrs(args):
     empirical_utrs = _calculate_empirical_utrs(
         transcript_info, options[CAGE_BAM_FILE], logger)
 
-    _print_empirical_utrs(empirical_utrs, logger)
+    _print_empirical_utrs(empirical_utrs, logger, options[OUTPUT_FILE])
