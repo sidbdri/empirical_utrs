@@ -1,0 +1,6 @@
+#!/usr/bin/env python
+
+import empirical_utrs.get_utr_sequences as entry_point
+import sys
+
+entry_point.get_utr_sequences(sys.argv[1:])

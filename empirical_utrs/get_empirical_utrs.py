@@ -12,7 +12,28 @@
 <cage-bam-file>              BAM file containing CAGE data.
 <output-file>                Output file container gene results
 
-TODO: Calculate empirical UTRs.
+Calculate empirical UTRs via the following procedure:
+
+    i) For each gene in the supplied GTF file, determine the region to be
+    scanned for the empirical transcription start site, namely from 1000 bases
+    upstream of the earliest location of the start of any transcript, to the
+    most downstream location of the end of any transcript.
+
+    ii) Within these scan bounds find location with greatest pile up of reads
+    mapped to the same strand as the gene. In the case of ties, choose the
+    rightmost location for genes on the plus strand, and leftmost location for
+    genes on the minus strand. This location is defined to be the empirical TSS
+    for the gene.
+
+    iii) Choose the transcript for which the empirical TSS is the smallest
+    number of bases upstream (> 0) of the defined coding start location. If the
+    TSS is downstream of the coding start location, ignore this transcript. If
+    the transcript has no coding start location defined, use the location of
+    the start of the first exon. The empirical 5' UTR is defined as the region
+    between the empirical TSS and the coding start location of the chosen
+    transcript.
+
+    iv) Reject this empirical 5' UTR if it is longer than 500 bases.
 """
 
 import docopt
@@ -43,12 +64,12 @@ def validate_command_line_options(options):
         opt.validate_file_option(
             options[CAGE_BAM_FILE], "CAGE BAM file must exist")
         opt.validate_file_already_exist_option(
-            options[OUTPUT_FILE], "Output file must not exist")
+            options[OUTPUT_FILE], "Output file must not already exist")
     except schema.SchemaError as exc:
         exit(exc.code)
 
 
-def _get_tss_scan_bounds(gene, logger):
+def _get_gene_bounds(gene, logger):
     gene_start = sys.maxint
     gene_end = -sys.maxint - 1
 
@@ -65,19 +86,26 @@ def _get_tss_scan_bounds(gene, logger):
                    start=gene_start, end=gene_end,
                    strand=gene.strand))
 
-    # TODO: fix this to account for genes on different strands
-    if gene.strand == "-":
-        return (gene_start, gene_end + 1000)
-    return(gene_start - 1000, gene_end)
+    return(gene_start, gene_end)
 
 
-def _get_maximum_pileup_location(samfile, gene, scan_start, scan_end, logger):
+def _get_tss_scan_bounds(gene, gene_bounds, logger):
+    return (gene_bounds[0], gene_bounds[1] + 1000) if gene.strand == "-" \
+        else (gene_bounds[0] - 1000, gene_bounds[1])
+
+
+def _get_maximum_pileup_location(samfile, gene, scan_bounds, logger):
+    logger.debug(("Get maximum pile up location, scan start {start}, " +
+                  "end {end}, strand {strand}").
+            format(start=scan_bounds[0], end=scan_bounds[1], strand=gene.strand))
+
     gene_is_reverse = gene.strand == "-"
     max_pileup = 0
     pileup_location = None
 
     for pileupcolumn in samfile.pileup(
-            "chr" + str(gene.seqname), scan_start, scan_end, truncate=True):
+            "chr" + str(gene.seqname), scan_bounds[0], scan_bounds[1],
+            truncate=True):
 
         pileup_count = 0
         for pileupread in pileupcolumn.pileups:
@@ -92,8 +120,9 @@ def _get_maximum_pileup_location(samfile, gene, scan_start, scan_end, logger):
     return (max_pileup, pileup_location)
 
 
-def _get_shortest_utr(gene, pileup_location, logger):
-    logger.debug("Getting shortest UTR for {gene}".format(gene=gene.name))
+def _get_shortest_utr(gene, gene_bounds, pileup_location, logger):
+    logger.debug("Getting shortest UTR for {gene}, pileup {pileup_location}".
+            format(gene=gene.name, pileup_location=pileup_location))
 
     shortest_utr = sys.maxint
     shortest_utr_transcript = None
@@ -102,29 +131,17 @@ def _get_shortest_utr(gene, pileup_location, logger):
         logger.debug("Transcript {transcript}, coding start {start}".format(
             transcript=transcript.name, start=transcript.coding_start))
 
-        # TODO: if no coding start, take first base of first exon as coding start
         if transcript.coding_start is None:
-            transcript_left_most=sys.maxint
-            transcript_right_most=-sys.maxint-1
-            for exon in transcript.exons:
-                if exon.start < transcript_left_most:
-                    transcript_left_most = exon.start
-                if exon.end > transcript_right_most:
-                    transcript_right_most = exon.end
+            transcript.coding_start = gene_bounds[1] if gene.strand == "-" \
+                else gene_bounds[0]
 
-
-            if gene.strand == "-":
-                transcript.coding_start = transcript_right_most
-            else:
-                transcript.coding_start = transcript_left_most
-
-
-            logger.debug("...no coding start, use the start position of the first exon {start} "
-                         "as coding start".format(start=transcript.coding_start))
-
+            logger.debug("...no coding start, use the start position of the " +
+                         "first exon {start} as coding start".format(
+                             start=transcript.coding_start))
 
         utr = pileup_location - transcript.coding_start
-        logger.debug("Transcript {transcript}, coding start {start}, UTR {utr}, strand {strand}".format(
+        logger.debug(("Transcript {transcript}, coding start {start}, " +
+                      "UTR {utr}, strand {strand}").format(
             transcript=transcript.name, start=transcript.coding_start,
             utr=utr, strand=gene.strand))
 
@@ -136,7 +153,8 @@ def _get_shortest_utr(gene, pileup_location, logger):
             utr = -utr
 
         if utr == 0:
-            logger.debug("...pileup location overlap with coding start. Skip this transscript.")
+            logger.debug("...pileup location overlaps with coding start. " +
+                         "Skip this transcript.")
             continue
 
         if utr < shortest_utr:
@@ -144,12 +162,12 @@ def _get_shortest_utr(gene, pileup_location, logger):
             shortest_utr = utr
             shortest_utr_transcript = transcript
 
-    if shortest_utr_transcript is None or shortest_utr > 500:
-        logger.debug("No shortest UTR found.")
-        return (None, None)
-
     logger.debug("Found shortest UTR {utr} for {transcript}".
-                format(utr=shortest_utr, transcript=shortest_utr_transcript.name))
+                format(utr=shortest_utr,
+                       transcript="no transcript" \
+                               if shortest_utr_transcript is None else \
+                               shortest_utr_transcript.name))
+
     return (shortest_utr, shortest_utr_transcript)
 
 
@@ -160,13 +178,18 @@ def _calculate_empirical_utrs(transcript_info, cage_bam, logger):
     no_alignment_data = 0
     no_pileup_location = 0
     no_shortest_utr = 0
+    shortest_utr_too_long = 0
 
     samfile = pysam.AlignmentFile(cage_bam)
 
     for gene_name, gene in transcript_info.iteritems():
+        logger.debug("Calculating empirical UTR for {gene}.".
+                format(gene=gene.name))
+
         count = count + 1
         if count % 1000 == 0:
-            logger.info("...processed {g} genes.".format(g=len(empirical_utrs)))
+            logger.info("...processed {g} genes, {e} empirical UTRs found.".
+                    format(g=count, e=len(empirical_utrs)))
 
         chr_seqname = 'chr' + str(gene.seqname)
         if chr_seqname not in samfile.references:
@@ -175,10 +198,13 @@ def _calculate_empirical_utrs(transcript_info, cage_bam, logger):
                         format(gene=gene_name))
             continue
 
-        scan_start, scan_end = _get_tss_scan_bounds(gene, logger)
+        gene_bounds = _get_gene_bounds(gene, logger)
+        scan_bounds = _get_tss_scan_bounds(gene, gene_bounds, logger)
 
         max_pileup, pileup_location = _get_maximum_pileup_location(
-                samfile, gene, scan_start, scan_end, logger)
+                samfile, gene, scan_bounds, logger)
+        logger.debug("Pileup location {location}, max pileup {max_pileup}".
+                format(location=pileup_location, max_pileup=max_pileup))
 
         if pileup_location is None:
             no_pileup_location += 1
@@ -187,23 +213,34 @@ def _calculate_empirical_utrs(transcript_info, cage_bam, logger):
             continue
 
         shortest_utr, shortest_utr_transcript = _get_shortest_utr(
-                gene, pileup_location, logger)
+                gene, gene_bounds, pileup_location, logger)
 
         if shortest_utr_transcript is None:
             no_shortest_utr += 1
-            logger.debug("Found no shortest UTR for {gene}".
+            logger.debug("Found no shortest UTR transcript for {gene}".
                         format(gene=gene_name))
             continue
 
+        if shortest_utr > 500:
+            shortest_utr_too_long +=  1
+            logger.debug("Shorted UTR too long {utr} for {gene}".
+                    format(utr=shortest_utr, gene=gene_name))
+            continue
+
         empirical_utrs[gene_name] = (pileup_location, max_pileup,
-                                     shortest_utr, shortest_utr_transcript.name,gene.strand,gene.seqname)
+                                     shortest_utr, shortest_utr_transcript.name,
+                                     gene.strand, gene.seqname)
 
-
-    logger.info("Found empirical UTRs for {num_genes} genes; no alignment data {no_align}, no pileup location {no_pileup}, no shortest UTR {no_utr}.".
+    logger.info(("Found empirical UTRs for {num_genes} genes; " +
+                 "no alignment data {no_align}, " +
+                 "no pileup location {no_pileup}, " +
+                 "no shortest UTR transcript {no_utr}, " +
+                 "shortest UTR too long {too_long}.").
                 format(num_genes=len(empirical_utrs),
                        no_align=no_alignment_data,
                        no_pileup=no_pileup_location,
-                       no_utr=no_shortest_utr))
+                       no_utr=no_shortest_utr,
+                       too_long=shortest_utr_too_long))
 
     return empirical_utrs
 
@@ -214,7 +251,6 @@ def _print_empirical_utrs(empirical_utrs, logger, output_file):
     f= open(output_file,"w+")
     f.write("gene,chr,strand,tss,pileup,utr,transcript\n")
 
-
     for gene in sorted(empirical_utrs.keys()):
         empirical_utr = empirical_utrs[gene]
 
@@ -222,19 +258,8 @@ def _print_empirical_utrs(empirical_utrs, logger, output_file):
             g=gene,
             tss=empirical_utr[0], pileup=empirical_utr[1],
             utr=empirical_utr[2], transcript=empirical_utr[3],
-            strand=empirical_utr[4],chr=empirical_utr[5]))
+            strand=empirical_utr[4], chr=empirical_utr[5]))
 
-
-    print("gene,chr,strand,tss,pileup,utr,transcript")
-
-    for gene in sorted(empirical_utrs.keys()):
-        empirical_utr = empirical_utrs[gene]
-
-        print("{g},{chr},{strand},{tss},{pileup},{utr},{transcript}".format(
-            g=gene,
-            tss=empirical_utr[0], pileup=empirical_utr[1],
-            utr=empirical_utr[2], transcript=empirical_utr[3],
-            strand=empirical_utr[4],chr=empirical_utr[5]))
 
 def get_empirical_utrs(args):
     docstring = __doc__.format(log_level_vals=LOG_LEVEL_VALS)
