@@ -1,16 +1,18 @@
 #!/usr/bin/env python
 
 """Usage:
-    get_empirical_utrs [--log-level=<log-level>] <transcript-gtf-file> <cage-bam-file> <output-file>
+    get_empirical_utrs [--log-level=<log-level>] [--max-utr-length=<max-utr-length>] <transcript-gtf-file> <cage-bam-file> <output-file>
 
--h --help                    Show this message.
--v --version                 Show version.
---log-level=<log-level>      Set logging level (one of {log_level_vals})
-                             [default: info].
-<transcript-gtf-file>        File containing transcript definitions in GTF
-                             format.
-<cage-bam-file>              BAM file containing CAGE data.
-<output-file>                Output file container gene results
+-h --help                           Show this message.
+-v --version                        Show version.
+--log-level=<log-level>             Set logging level (one of {log_level_vals})
+                                    [default: info].
+--max-utr-length=<max-utr-length>   Maximum allowed length for empirical UTR
+                                    [default: 500].
+<transcript-gtf-file>               File containing transcript definitions
+                                    in GTF format.
+<cage-bam-file>                     BAM file containing CAGE data.
+<output-file>                       Output file container gene results
 
 Calculate empirical UTRs via the following procedure:
 
@@ -33,7 +35,7 @@ Calculate empirical UTRs via the following procedure:
     between the empirical TSS and the coding start location of the chosen
     transcript.
 
-    iv) Reject this empirical 5' UTR if it is longer than 500 bases.
+    iv) Reject this empirical 5' UTR if it is longer than <max-utr-length> bases.
 """
 
 import docopt
@@ -54,6 +56,7 @@ LOG_LEVEL_VALS = str(log.LOG_LEVELS.keys())
 TRANSCRIPT_GTF_FILE = "<transcript-gtf-file>"
 CAGE_BAM_FILE = "<cage-bam-file>"
 OUTPUT_FILE = "<output-file>"
+MAXIMUM_UTR_LENGTH = "--max-utr-length"
 
 def validate_command_line_options(options):
     try:
@@ -65,6 +68,9 @@ def validate_command_line_options(options):
             options[CAGE_BAM_FILE], "CAGE BAM file must exist")
         opt.validate_file_already_exist_option(
             options[OUTPUT_FILE], "Output file must not already exist")
+        options[MAXIMUM_UTR_LENGTH] = opt.validate_int_option(
+            options[MAXIMUM_UTR_LENGTH], "Maximum UTR length must be " +
+            "greater than 1", 1)
     except schema.SchemaError as exc:
         exit(exc.code)
 
@@ -171,7 +177,7 @@ def _get_shortest_utr(gene, gene_bounds, pileup_location, logger):
     return (shortest_utr, shortest_utr_transcript)
 
 
-def _calculate_empirical_utrs(transcript_info, cage_bam, logger):
+def _calculate_empirical_utrs(transcript_info, cage_bam, maximum_utr_length, logger):
     logger.info("Calculating empirical UTRs...")
     empirical_utrs = {}
     count = 0
@@ -190,6 +196,16 @@ def _calculate_empirical_utrs(transcript_info, cage_bam, logger):
         if count % 1000 == 0:
             logger.info("...processed {g} genes, {e} empirical UTRs found.".
                     format(g=count, e=len(empirical_utrs)))
+            logger.info(("Found empirical UTRs for {num_genes} genes; " +
+                         "no alignment data {no_align}, " +
+                         "no pileup location {no_pileup}, " +
+                         "no shortest UTR transcript {no_utr}, " +
+                         "shortest UTR too long {too_long}.").
+                        format(num_genes=len(empirical_utrs),
+                               no_align=no_alignment_data,
+                               no_pileup=no_pileup_location,
+                               no_utr=no_shortest_utr,
+                               too_long=shortest_utr_too_long))
 
         chr_seqname = 'chr' + str(gene.seqname)
         if chr_seqname not in samfile.references:
@@ -221,7 +237,7 @@ def _calculate_empirical_utrs(transcript_info, cage_bam, logger):
                         format(gene=gene_name))
             continue
 
-        if shortest_utr > 500:
+        if shortest_utr > maximum_utr_length:
             shortest_utr_too_long +=  1
             logger.debug("Shorted UTR too long {utr} for {gene}".
                     format(utr=shortest_utr, gene=gene_name))
@@ -273,6 +289,7 @@ def get_empirical_utrs(args):
     transcript_info = gtf_info.get_transcript_info()
 
     empirical_utrs = _calculate_empirical_utrs(
-        transcript_info, options[CAGE_BAM_FILE], logger)
+        transcript_info, options[CAGE_BAM_FILE],
+        options[MAXIMUM_UTR_LENGTH], logger)
 
     _print_empirical_utrs(empirical_utrs, logger, options[OUTPUT_FILE])

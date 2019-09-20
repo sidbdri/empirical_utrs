@@ -12,7 +12,7 @@ setup(
     packages=['empirical_utrs'],
     install_requires=[
         'docopt==0.6.2',
-        'numpy',
+        'numpy==1.14.3',
         'pandas==0.13.0',
         'pysam==0.14.1',
         'python-dateutil==2.4.2',
