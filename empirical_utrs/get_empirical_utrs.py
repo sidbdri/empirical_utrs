@@ -1,12 +1,16 @@
 #!/usr/bin/env python
 
 """Usage:
-    get_empirical_utrs [--log-level=<log-level>] [--max-utr-length=<max-utr-length>] <transcript-gtf-file> <cage-bam-file> <output-file>
+    get_empirical_utrs [--log-level=<log-level>] [--add-scan-bounds=<add-scan-bounds>] [--max-utr-length=<max-utr-length>] <transcript-gtf-file> <cage-bam-file> <output-file>
 
 -h --help                           Show this message.
 -v --version                        Show version.
 --log-level=<log-level>             Set logging level (one of {log_level_vals})
                                     [default: info].
+--add-scan-bounds=<add-scan-bounds> Scan for the empirical transcription start
+                                    site from this number of bases upstream of
+                                    the earliest location of any transcript
+                                    [default: 1000].
 --max-utr-length=<max-utr-length>   Maximum allowed length for empirical UTR
                                     [default: 500].
 <transcript-gtf-file>               File containing transcript definitions
@@ -17,9 +21,10 @@
 Calculate empirical UTRs via the following procedure:
 
     i) For each gene in the supplied GTF file, determine the region to be
-    scanned for the empirical transcription start site, namely from 1000 bases
-    upstream of the earliest location of the start of any transcript, to the
-    most downstream location of the end of any transcript.
+    scanned for the empirical transcription start site, namely from
+    <add-scan-bounds> bases upstream of the earliest location of the start
+    of any transcript, to the most downstream location of the end of any
+    transcript.
 
     ii) Within these scan bounds find location with greatest pile up of reads
     mapped to the same strand as the gene. In the case of ties, choose the
@@ -57,6 +62,7 @@ TRANSCRIPT_GTF_FILE = "<transcript-gtf-file>"
 CAGE_BAM_FILE = "<cage-bam-file>"
 OUTPUT_FILE = "<output-file>"
 MAXIMUM_UTR_LENGTH = "--max-utr-length"
+ADD_SCAN_BOUNDS = "--add-scan-bounds"
 
 def validate_command_line_options(options):
     try:
@@ -70,7 +76,10 @@ def validate_command_line_options(options):
             options[OUTPUT_FILE], "Output file must not already exist")
         options[MAXIMUM_UTR_LENGTH] = opt.validate_int_option(
             options[MAXIMUM_UTR_LENGTH], "Maximum UTR length must be " +
-            "greater than 1", 1)
+            "greater than 0", 1)
+        options[ADD_SCAN_BOUNDS] = opt.validate_int_option(
+            options[ADD_SCAN_BOUNDS], "Scan bounds addition must be " +
+            "greater than 0", 1)
     except schema.SchemaError as exc:
         exit(exc.code)
 
@@ -95,9 +104,9 @@ def _get_gene_bounds(gene, logger):
     return(gene_start, gene_end)
 
 
-def _get_tss_scan_bounds(gene, gene_bounds, logger):
-    return (gene_bounds[0], gene_bounds[1] + 1000) if gene.strand == "-" \
-        else (gene_bounds[0] - 1000, gene_bounds[1])
+def _get_tss_scan_bounds(gene, gene_bounds, add_scan_bounds, logger):
+    return (gene_bounds[0], gene_bounds[1] + add_scan_bounds) if gene.strand == "-" \
+        else (gene_bounds[0] - add_scan_bounds, gene_bounds[1])
 
 
 def _get_maximum_pileup_location(samfile, gene, scan_bounds, logger):
@@ -177,7 +186,8 @@ def _get_shortest_utr(gene, gene_bounds, pileup_location, logger):
     return (shortest_utr, shortest_utr_transcript)
 
 
-def _calculate_empirical_utrs(transcript_info, cage_bam, maximum_utr_length, logger):
+def _calculate_empirical_utrs(transcript_info, cage_bam, add_scan_bounds,
+                              maximum_utr_length, logger):
     logger.info("Calculating empirical UTRs...")
     empirical_utrs = {}
     count = 0
@@ -215,7 +225,7 @@ def _calculate_empirical_utrs(transcript_info, cage_bam, maximum_utr_length, log
             continue
 
         gene_bounds = _get_gene_bounds(gene, logger)
-        scan_bounds = _get_tss_scan_bounds(gene, gene_bounds, logger)
+        scan_bounds = _get_tss_scan_bounds(gene, gene_bounds, add_scan_bounds, logger)
 
         max_pileup, pileup_location = _get_maximum_pileup_location(
                 samfile, gene, scan_bounds, logger)
@@ -290,6 +300,6 @@ def get_empirical_utrs(args):
 
     empirical_utrs = _calculate_empirical_utrs(
         transcript_info, options[CAGE_BAM_FILE],
-        options[MAXIMUM_UTR_LENGTH], logger)
+        options[ADD_SCAN_BOUNDS], options[MAXIMUM_UTR_LENGTH], logger)
 
     _print_empirical_utrs(empirical_utrs, logger, options[OUTPUT_FILE])
