@@ -22,6 +22,7 @@ setup(
     ],
     scripts=[
         'bin/get_empirical_utrs',
+        'bin/get_empirical_utrs_mk2',
         'bin/get_utr_sequences',
     ]
 )

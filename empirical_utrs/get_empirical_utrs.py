@@ -249,7 +249,7 @@ def _calculate_empirical_utrs(transcript_info, cage_bam, add_scan_bounds,
 
         if shortest_utr > maximum_utr_length:
             shortest_utr_too_long +=  1
-            logger.debug("Shorted UTR too long {utr} for {gene}".
+            logger.info("Shorted UTR too long {utr} for {gene}".
                     format(utr=shortest_utr, gene=gene_name))
             continue
 
