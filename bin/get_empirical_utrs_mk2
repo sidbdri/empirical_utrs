@@ -1,0 +1,6 @@
+#!/usr/bin/env python
+
+import empirical_utrs.get_empirical_utrs_mk2 as entry_point
+import sys
+
+entry_point.get_empirical_utrs(sys.argv[1:])

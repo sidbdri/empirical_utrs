@@ -80,7 +80,7 @@ def _write_sequences(input_file, output_file, logger):
             if count % 1000 == 0:
                 logger.info("Processed {utr} UTRs.".format(utr=count))
 
-            gene, chrom, strand, tss, pileup, utr, transcript = \
+            gene, transcript, chrom, strand, tss, pileup, utr = \
                 line.strip('\n').split(',')
             tss = int(tss)
             utr = int(utr)
@@ -98,8 +98,8 @@ def _write_sequences(input_file, output_file, logger):
             sequence_str = '\n'.join([sequence[i:i + FASTA_SEQ_LINE_LIMIT] \
                     for i in range(0, len(sequence), FASTA_SEQ_LINE_LIMIT)])
 
-            out.write((">{gene_name} {chrom},{strand},{tss},{pileup}," +
-                       "{utr},{transcript}\n{seq}\n").format(
+            out.write((">{gene_name},{transcript},{chrom},{strand},{tss},{pileup}," +
+                       "{utr}\n{seq}\n").format(
                 gene_name=gene,
                 chrom=chrom, strand=strand, tss=tss, pileup=pileup,
                 utr=utr, transcript=transcript, seq=sequence_str.upper()))

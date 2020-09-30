@@ -1,3 +1,4 @@
-*.pyc
-nohup.out
+data/*
+results/*
 empirical_utrs.egg-info/*
+*.pyc
